@@ -91,7 +91,6 @@
 #include <linux/sched/coredump.h>
 #include <linux/sched/debug.h>
 #include <linux/sched/stat.h>
-#include <linux/sched/clock.h>
 #include <linux/flex_array.h>
 #include <linux/posix-timers.h>
 #include <linux/cpufreq_times.h>
@@ -2620,6 +2619,67 @@ static const struct file_operations proc_pid_set_timerslack_ns_operations = {
 	.release	= single_release,
 };
 
+// add for chainboost CONFIG_ONEPLUS_CHAIN_BOOST
+static ssize_t main_boost_switch_read(struct file *file,
+			char __user *buf, size_t count, loff_t *ppos)
+{
+	struct task_struct *task = get_proc_task(file_inode(file));
+	char buffer[PROC_NUMBUF];
+	size_t len;
+	int main_boost_switch;
+
+	if (!task)
+		return -ESRCH;
+
+	main_boost_switch = task->main_boost_switch;
+
+	put_task_struct(task);
+
+	len = snprintf(buffer, sizeof(buffer), "%d\n", main_boost_switch);
+	return simple_read_from_buffer(buf, count, ppos, buffer, len);
+}
+
+static ssize_t main_boost_switch_write(struct file *file,
+			const char __user *buf, size_t count, loff_t *ppos)
+{
+	struct task_struct *task;
+	char buffer[PROC_NUMBUF];
+	int main_boost_switch;
+	int err;
+
+	memset(buffer, 0, sizeof(buffer));
+
+	if (count > sizeof(buffer) - 1)
+		count = sizeof(buffer) - 1;
+	if (copy_from_user(buffer, buf, count)) {
+		err = -EFAULT;
+		goto out;
+	}
+
+	err = kstrtoint(strstrip(buffer), 0, &main_boost_switch);
+	if (err)
+		goto out;
+
+	task = get_proc_task(file_inode(file));
+	if (!task) {
+		err = -ESRCH;
+		goto out;
+	}
+
+	task->main_boost_switch = main_boost_switch;
+
+	put_task_struct(task);
+
+out:
+	return err < 0 ? err : count;
+}
+
+
+static const struct file_operations proc_main_boost_switch_operations = {
+	.read		= main_boost_switch_read,
+	.write		= main_boost_switch_write,
+};
+
 static int proc_pident_instantiate(struct inode *dir,
 	struct dentry *dentry, struct task_struct *task, const void *ptr)
 {
@@ -3003,116 +3063,6 @@ static const struct file_operations proc_hung_task_detection_enabled_operations 
 };
 #endif
 
-static ssize_t proc_sched_task_boost_read(struct file *file,
-			   char __user *buf, size_t count, loff_t *ppos)
-{
-	struct task_struct *task = get_proc_task(file_inode(file));
-	char buffer[PROC_NUMBUF];
-	int sched_boost;
-	size_t len;
-
-	if (!task)
-		return -ESRCH;
-	sched_boost = task->boost;
-	put_task_struct(task);
-	len = snprintf(buffer, sizeof(buffer), "%d\n", sched_boost);
-	return simple_read_from_buffer(buf, count, ppos, buffer, len);
-}
-
-static ssize_t proc_sched_task_boost_write(struct file *file,
-		   const char __user *buf, size_t count, loff_t *ppos)
-{
-	struct task_struct *task = get_proc_task(file_inode(file));
-	char buffer[PROC_NUMBUF];
-	int sched_boost;
-	int err;
-
-	if (!task)
-		return -ESRCH;
-	memset(buffer, 0, sizeof(buffer));
-	if (count > sizeof(buffer) - 1)
-		count = sizeof(buffer) - 1;
-	if (copy_from_user(buffer, buf, count)) {
-		err = -EFAULT;
-		goto out;
-	}
-
-	err = kstrtoint(strstrip(buffer), 0, &sched_boost);
-	if (err)
-		goto out;
-	if (sched_boost < 0 || sched_boost > 2) {
-		err = -EINVAL;
-		goto out;
-	}
-
-	task->boost = sched_boost;
-	if (sched_boost == 0)
-		task->boost_period = 0;
-out:
-	put_task_struct(task);
-	return err < 0 ? err : count;
-}
-
-static ssize_t proc_sched_task_boost_period_read(struct file *file,
-			   char __user *buf, size_t count, loff_t *ppos)
-{
-	struct task_struct *task = get_proc_task(file_inode(file));
-	char buffer[PROC_NUMBUF];
-	u64 sched_boost_period_ms = 0;
-	size_t len;
-
-	if (!task)
-		return -ESRCH;
-	sched_boost_period_ms = div64_ul(task->boost_period, 1000000UL);
-	put_task_struct(task);
-	len = snprintf(buffer, sizeof(buffer), "%llu\n", sched_boost_period_ms);
-	return simple_read_from_buffer(buf, count, ppos, buffer, len);
-}
-
-static ssize_t proc_sched_task_boost_period_write(struct file *file,
-		   const char __user *buf, size_t count, loff_t *ppos)
-{
-	struct task_struct *task = get_proc_task(file_inode(file));
-	char buffer[PROC_NUMBUF];
-	unsigned int sched_boost_period;
-	int err;
-
-	memset(buffer, 0, sizeof(buffer));
-	if (count > sizeof(buffer) - 1)
-		count = sizeof(buffer) - 1;
-	if (copy_from_user(buffer, buf, count)) {
-		err = -EFAULT;
-		goto out;
-	}
-
-	err = kstrtouint(strstrip(buffer), 0, &sched_boost_period);
-	if (err)
-		goto out;
-	if (task->boost == 0 && sched_boost_period) {
-		/* setting boost period without boost is invalid */
-		err = -EINVAL;
-		goto out;
-	}
-
-	task->boost_period = (u64)sched_boost_period * 1000 * 1000;
-	task->boost_expires = sched_clock() + task->boost_period;
-out:
-	put_task_struct(task);
-	return err < 0 ? err : count;
-}
-
-static const struct file_operations proc_task_boost_enabled_operations = {
-	.read       = proc_sched_task_boost_read,
-	.write      = proc_sched_task_boost_write,
-	.llseek     = generic_file_llseek,
-};
-
-static const struct file_operations proc_task_boost_period_operations = {
-	.read		= proc_sched_task_boost_period_read,
-	.write		= proc_sched_task_boost_period_write,
-	.llseek		= generic_file_llseek,
-};
-
 #ifdef CONFIG_USER_NS
 static int proc_id_map_open(struct inode *inode, struct file *file,
 	const struct seq_operations *seq_ops)
@@ -3329,46 +3279,6 @@ static const struct file_operations proc_pid_memplus_type_operations = {
 };
 #endif
 
-static ssize_t vm_fragment_max_gap_read(struct file *file,
-				char __user *buf, size_t count, loff_t *ppos)
-{
-	struct task_struct *task;
-	struct mm_struct *mm;
-	struct vm_area_struct *vma;
-	char buffer[PROC_NUMBUF];
-	size_t len;
-	int vm_fragment_gap_max = 0;
-
-	task = get_proc_task(file_inode(file));
-	if (!task)
-		return -ESRCH;
-
-	mm = get_task_mm(task);
-	if (!mm) {
-		put_task_struct(task);
-		return -ENOMEM;
-	}
-
-	if (RB_EMPTY_ROOT(&mm->mm_rb)) {
-		mmput(mm);
-		put_task_struct(task);
-		return -ENOMEM;
-	}
-
-	vma = rb_entry(mm->mm_rb.rb_node, struct vm_area_struct, vm_rb);
-	vm_fragment_gap_max = (int)(vma->rb_subtree_gap >> 20);
-
-	mmput(mm);
-	put_task_struct(task);
-
-	len = snprintf(buffer, sizeof(buffer), "%d\n", vm_fragment_gap_max);
-	return simple_read_from_buffer(buf, count, ppos, buffer, len);
-}
-
-static const struct file_operations proc_vm_fragment_monitor_operations = {
-	.read = vm_fragment_max_gap_read,
-};
-
 /*
  * Thread groups
  */
@@ -3395,8 +3305,6 @@ static const struct pid_entry tgid_base_stuff[] = {
 #ifdef CONFIG_SCHED_WALT
 	REG("sched_init_task_load", 00644, proc_pid_sched_init_task_load_operations),
 	REG("sched_group_id", 00666, proc_pid_sched_group_id_operations),
-	REG("sched_boost", 0666,  proc_task_boost_enabled_operations),
-	REG("sched_boost_period_ms", 0666, proc_task_boost_period_operations),
 #endif
 #ifdef CONFIG_SCHED_DEBUG
 	REG("sched",      S_IRUGO|S_IWUSR, proc_pid_sched_operations),
@@ -3486,6 +3394,8 @@ static const struct pid_entry tgid_base_stuff[] = {
 	REG("timers",	  S_IRUGO, proc_timers_operations),
 #endif
 	REG("timerslack_ns", S_IRUGO|S_IWUGO, proc_pid_set_timerslack_ns_operations),
+// add for chainboost CONFIG_ONEPLUS_CHAIN_BOOST
+	REG("main_boost_switch", 0666, proc_main_boost_switch_operations),
 #ifdef CONFIG_LIVEPATCH
 	ONE("patch_state",  S_IRUSR, proc_pid_patch_state),
 #endif
@@ -3499,7 +3409,6 @@ static const struct pid_entry tgid_base_stuff[] = {
 #ifdef CONFIG_SMART_BOOST
 	REG("page_hot_count", 0666, proc_page_hot_count_operations),
 #endif
-	REG("vm_fragment_gap_max", 0666, proc_vm_fragment_monitor_operations),
 
 };
 

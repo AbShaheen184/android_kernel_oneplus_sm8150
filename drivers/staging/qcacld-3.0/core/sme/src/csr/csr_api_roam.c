@@ -1808,53 +1808,54 @@ enum band_info csr_get_current_band(tHalHandle hHal)
 	return pMac->roam.configParam.bandCapability;
 }
 
-void csr_flush_cfg_bg_scan_roam_channel_list(tCsrChannelInfo *channel_info)
+/* This function flushes the roam scan cache */
+QDF_STATUS csr_flush_cfg_bg_scan_roam_channel_list(tpAniSirGlobal pMac,
+						   uint8_t sessionId)
 {
+	QDF_STATUS status = QDF_STATUS_SUCCESS;
+
+	tpCsrNeighborRoamControlInfo pNeighborRoamInfo =
+		&pMac->roam.neighborRoamInfo[sessionId];
+
 	/* Free up the memory first (if required) */
-	if (channel_info->ChannelList) {
-		qdf_mem_free(channel_info->ChannelList);
-		channel_info->ChannelList = NULL;
-		channel_info->numOfChannels = 0;
+	if (NULL != pNeighborRoamInfo->cfgParams.channelInfo.ChannelList) {
+		qdf_mem_free(pNeighborRoamInfo->cfgParams.channelInfo.
+			     ChannelList);
+		pNeighborRoamInfo->cfgParams.channelInfo.ChannelList = NULL;
+		pNeighborRoamInfo->cfgParams.channelInfo.numOfChannels = 0;
 	}
+	return status;
 }
 
-/**
- * csr_flush_roam_scan_chan_lists() - Flush the roam channel lists
- * @mac: Global MAC context
- * @vdev_id: vdev id
- *
- * Flush the roam channel lists pref_chan_info and specific_chan_info.
- *
- * Return: None
+/*
+ * This function flushes the roam scan cache and creates fresh cache
+ * based on the input channel list
  */
-static void
-csr_flush_roam_scan_chan_lists(tpAniSirGlobal mac, uint8_t vdev_id)
-{
-	tCsrChannelInfo *chan_info;
-
-	chan_info =
-	&mac->roam.neighborRoamInfo[vdev_id].cfgParams.pref_chan_info;
-	csr_flush_cfg_bg_scan_roam_channel_list(chan_info);
-
-	chan_info =
-	&mac->roam.neighborRoamInfo[vdev_id].cfgParams.specific_chan_info;
-	csr_flush_cfg_bg_scan_roam_channel_list(chan_info);
-}
-
 QDF_STATUS csr_create_bg_scan_roam_channel_list(tpAniSirGlobal pMac,
-						tCsrChannelInfo *channel_info,
+						uint8_t sessionId,
 						const uint8_t *pChannelList,
 						const uint8_t numChannels)
 {
 	QDF_STATUS status = QDF_STATUS_SUCCESS;
+	tpCsrNeighborRoamControlInfo pNeighborRoamInfo =
+		&pMac->roam.neighborRoamInfo[sessionId];
 
-	channel_info->ChannelList = qdf_mem_malloc(sizeof(uint32_t) * numChannels);
-	if (!channel_info->ChannelList)
+	pNeighborRoamInfo->cfgParams.channelInfo.numOfChannels = numChannels;
+
+	pNeighborRoamInfo->cfgParams.channelInfo.ChannelList =
+		qdf_mem_malloc(pNeighborRoamInfo->cfgParams.channelInfo.
+			       numOfChannels);
+
+	if (NULL == pNeighborRoamInfo->cfgParams.channelInfo.ChannelList) {
+		sme_err("Memory Allocation for CFG Channel List failed");
+		pNeighborRoamInfo->cfgParams.channelInfo.numOfChannels = 0;
 		return QDF_STATUS_E_NOMEM;
+	}
 
-	channel_info->numOfChannels = numChannels;
-	qdf_mem_copy(channel_info->ChannelList, pChannelList, numChannels);
-
+	/* Update the roam global structure */
+	qdf_mem_copy(pNeighborRoamInfo->cfgParams.channelInfo.ChannelList,
+		     pChannelList,
+		     pNeighborRoamInfo->cfgParams.channelInfo.numOfChannels);
 	return status;
 }
 
@@ -3087,9 +3088,6 @@ QDF_STATUS csr_change_default_config_param(tpAniSirGlobal pMac,
 		sme_debug("nRoamBeaconRssiWeight: %d",
 			pMac->roam.configParam.neighborRoamConfig.
 			nRoamBeaconRssiWeight);
-		sme_debug("full_scan_period: %u",
-			  pMac->roam.configParam.neighborRoamConfig.
-			  full_roam_scan_period);
 		pMac->roam.configParam.addTSWhenACMIsOff =
 			pParam->addTSWhenACMIsOff;
 		pMac->scan.fEnableBypass11d = pParam->fEnableBypass11d;
@@ -7556,10 +7554,8 @@ static void csr_roam_process_start_bss_success(tpAniSirGlobal mac_ctx,
 	tDot11fBeaconIEs *ies_ptr = NULL;
 	tSirMacAddr bcast_mac = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 	QDF_STATUS status;
-#ifdef FEATURE_WLAN_DIAG_SUPPORT_CSR
 	host_log_ibss_pkt_type *ibss_log;
 	uint32_t bi;
-#endif
 #ifdef FEATURE_WLAN_MCC_TO_SCC_SWITCH
 	tSirSmeHTProfile *src_profile = NULL;
 	tCsrRoamHTProfile *dst_profile = NULL;
@@ -8340,9 +8336,7 @@ static bool csr_roam_process_results(tpAniSirGlobal mac_ctx, tSmeCmd *cmd,
 	struct csr_roam_profile *profile = &cmd->u.roamCmd.roamProfile;
 	eRoamCmdStatus roam_status;
 	eCsrRoamResult roam_result;
-#ifdef FEATURE_WLAN_DIAG_SUPPORT_CSR
 	host_log_ibss_pkt_type *ibss_log;
-#endif
 	tSirSmeStartBssRsp  *start_bss_rsp = NULL;
 
 	if (!session) {
@@ -13356,7 +13350,6 @@ static QDF_STATUS csr_roam_start_wait_for_key_timer(
 	if (csr_neighbor_roam_is_handoff_in_progress(pMac,
 				     pMac->roam.WaitForKeyTimerInfo.
 				     sessionId)) {
-#ifdef WLAN_DEBUG
 		/* Disable heartbeat timer when hand-off is in progress */
 		sme_debug("disabling HB timer in state: %s sub-state: %s",
 			mac_trace_get_neighbour_roam_state(
@@ -13364,7 +13357,6 @@ static QDF_STATUS csr_roam_start_wait_for_key_timer(
 			mac_trace_getcsr_roam_sub_state(
 				pMac->roam.curSubState[pMac->roam.
 					WaitForKeyTimerInfo.sessionId]));
-#endif
 		cfg_set_int(pMac, WNI_CFG_HEART_BEAT_THRESHOLD, 0);
 	}
 	sme_debug("csrScanStartWaitForKeyTimer");
@@ -13380,6 +13372,7 @@ QDF_STATUS csr_roam_stop_wait_for_key_timer(tpAniSirGlobal pMac)
 	tpCsrNeighborRoamControlInfo pNeighborRoamInfo =
 		&pMac->roam.neighborRoamInfo[pMac->roam.WaitForKeyTimerInfo.
 					     sessionId];
+#endif
 
 	sme_debug("WaitForKey timer stopped in state: %s sub-state: %s",
 		mac_trace_get_neighbour_roam_state(pNeighborRoamInfo->
@@ -13388,8 +13381,6 @@ QDF_STATUS csr_roam_stop_wait_for_key_timer(tpAniSirGlobal pMac)
 						curSubState[pMac->roam.
 							    WaitForKeyTimerInfo.
 							    sessionId]));
-#endif
-
 	if (csr_neighbor_roam_is_handoff_in_progress(pMac,
 					pMac->roam.WaitForKeyTimerInfo.
 						     sessionId)) {
@@ -15915,9 +15906,8 @@ QDF_STATUS csr_send_join_req_msg(tpAniSirGlobal pMac, uint32_t sessionId,
 		}
 		qdf_mem_copy(&csr_join_req->selfMacAddr, &pSession->selfMacAddr,
 			     sizeof(tSirMacAddr));
-		sme_err("vdevid-%d: Connecting to ssid:%.*s bssid: "MAC_ADDRESS_STR" rssi: %d channel: %d country_code: %c%c",
-			sessionId, csr_join_req->ssId.length,
-			csr_join_req->ssId.ssId,
+		sme_err("Connecting to ssid:%.*s bssid: "MAC_ADDRESS_STR" rssi: %d channel: %d country_code: %c%c",
+			csr_join_req->ssId.length, csr_join_req->ssId.ssId,
 			MAC_ADDR_ARRAY(pBssDescription->bssId),
 			pBssDescription->rssi, pBssDescription->channelId,
 			pMac->scan.countryCodeCurrent[0],
@@ -17968,7 +17958,6 @@ void csr_cleanup_session(tpAniSirGlobal pMac, uint32_t sessionId)
 
 		sme_reset_key(MAC_HANDLE(pMac), sessionId);
 		csr_reset_cfg_privacy(pMac);
-		csr_flush_roam_scan_chan_lists(pMac, sessionId);
 		csr_roam_free_connect_profile(&pSession->connectedProfile);
 		csr_roam_free_connected_info(pMac, &pSession->connectedInfo);
 		qdf_mc_timer_destroy(&pSession->hTimerRoaming);
@@ -18858,23 +18847,23 @@ csr_check_band_channel_match(enum band_info band, uint8_t channel)
 }
 
 /**
- * csr_populate_roam_chan_list()
+ * csr_fetch_ch_lst_from_ini() - fetch channel list from ini and update req msg
  * parameters
  * @mac_ctx:      global mac ctx
- * @dst: Destination roam network to populate the roam chan list
- * @src: Source channel list
+ * @roam_info:    roam info struct
+ * @req_buf:      out param, roam offload scan request packet
  *
- * Return: QDF_STATUS enumeration
+ * Return: result of operation
  */
 static QDF_STATUS
-csr_populate_roam_chan_list(tpAniSirGlobal mac_ctx,
-			    tSirRoamNetworkType *dst,
-			    tCsrChannelInfo *src)
+csr_fetch_ch_lst_from_ini(tpAniSirGlobal mac_ctx,
+			  tpCsrNeighborRoamControlInfo roam_info,
+			  tSirRoamOffloadScanReq *req_buf)
 {
 	enum band_info band;
 	uint8_t i = 0;
 	uint8_t num_channels = 0;
-	uint8_t *ch_lst = src->ChannelList;
+	uint8_t *ch_lst = roam_info->cfgParams.channelInfo.ChannelList;
 	uint16_t  unsafe_chan[NUM_CHANNELS];
 	uint16_t  unsafe_chan_cnt = 0;
 	uint16_t  cnt = 0;
@@ -18903,12 +18892,7 @@ csr_populate_roam_chan_list(tpAniSirGlobal mac_ctx,
 		return QDF_STATUS_E_FAILURE;
 	}
 
-	num_channels = dst->ChannelCount;
-	for (i = 0; i < src->numOfChannels; i++) {
-		if (csr_is_channel_present_in_list(dst->ChannelCache,
-						   num_channels,
-						   *ch_lst))
-			continue;
+	for (i = 0; i < roam_info->cfgParams.channelInfo.numOfChannels; i++) {
 		if (!csr_check_band_channel_match(band, *ch_lst))
 			continue;
 		/* Allow DFS channels only if the DFS roaming is enabled */
@@ -18941,42 +18925,13 @@ csr_populate_roam_chan_list(tpAniSirGlobal mac_ctx,
 				continue;
 			}
 		}
-		dst->ChannelCache[num_channels++] = *ch_lst;
+		req_buf->ConnectedNetwork.ChannelCache[num_channels++] =
+			*ch_lst;
 		ch_lst++;
+
 	}
-	dst->ChannelCount = num_channels;
-
-	return QDF_STATUS_SUCCESS;
-}
-
-/**
- * csr_fetch_ch_lst_from_ini() - fetch channel list from ini and update req msg
- * parameters
- * @mac_ctx:      global mac ctx
- * @roam_info:    roam info struct
- * @req_buf:      out param, roam offload scan request packet
- *
- * Return: result of operation
- */
-static QDF_STATUS
-csr_fetch_ch_lst_from_ini(tpAniSirGlobal mac_ctx,
-			  tpCsrNeighborRoamControlInfo roam_info,
-			  struct sSirRoamOffloadScanReq *req_buf)
-{
-	QDF_STATUS status;
-	tCsrChannelInfo *specific_chan_info;
-
-	specific_chan_info = &roam_info->cfgParams.specific_chan_info;
-
-	status = csr_populate_roam_chan_list(mac_ctx,
-					     &req_buf->ConnectedNetwork,
-					     specific_chan_info);
-	if (status != QDF_STATUS_SUCCESS) {
-		sme_err("Failed to copy channels to roam list");
-		return status;
-	}
+	req_buf->ConnectedNetwork.ChannelCount = num_channels;
 	req_buf->ChannelCacheType = CHANNEL_LIST_STATIC;
-
 	return QDF_STATUS_SUCCESS;
 }
 
@@ -19172,40 +19127,6 @@ csr_fetch_valid_ch_lst(tpAniSirGlobal mac_ctx,
 }
 
 /**
- * csr_add_ch_lst_from_roam_scan_list() - channel from roam scan chan list
- * parameters
- * @mac_ctx: Global mac ctx
- * @req_buf: out param, roam offload scan request packet
- * @roam_info: roam info struct
- *
- * Return: QDF_STATUS
- */
-static QDF_STATUS
-csr_add_ch_lst_from_roam_scan_list(tpAniSirGlobal mac_ctx,
-				   tSirRoamOffloadScanReq *req_buf,
-				   tpCsrNeighborRoamControlInfo roam_info)
-{
-	QDF_STATUS status;
-	tCsrChannelInfo *pref_chan_info = &roam_info->cfgParams.pref_chan_info;
-
-	if (!pref_chan_info->numOfChannels)
-		return QDF_STATUS_SUCCESS;
-
-	status = csr_populate_roam_chan_list(mac_ctx,
-					     &req_buf->ConnectedNetwork,
-					     pref_chan_info);
-	if (status != QDF_STATUS_SUCCESS) {
-		sme_err("Failed to copy channels to roam list");
-		return status;
-	}
-	sme_debug("Added to roam chan list:");
-	sme_dump_chan_list(pref_chan_info);
-	req_buf->ChannelCacheType = CHANNEL_LIST_DYNAMIC;
-
-	return QDF_STATUS_SUCCESS;
-}
-
-/**
  * csr_create_roam_scan_offload_request() - init roam offload scan request
  *
  * parameters
@@ -19233,9 +19154,6 @@ csr_create_roam_scan_offload_request(tpAniSirGlobal mac_ctx,
 	tSirRoamOffloadScanReq *req_buf = NULL;
 	tpCsrChannelInfo curr_ch_lst_info =
 		&roam_info->roamChannelInfo.currentChannelListInfo;
-	tCsrChannelInfo *specific_chan_info;
-
-	specific_chan_info = &roam_info->cfgParams.specific_chan_info;
 #ifdef FEATURE_WLAN_ESE
 	/*
 	 * this flag will be true if connection is ESE and no neighbor
@@ -19306,7 +19224,7 @@ csr_create_roam_scan_offload_request(tpAniSirGlobal mac_ctx,
 		roam_info->cfgParams.nOpportunisticThresholdDiff;
 	req_buf->RoamRescanRssiDiff =
 		roam_info->cfgParams.nRoamRescanRssiDiff;
-	req_buf->RoamRssiDiff = roam_info->cfgParams.roam_rssi_diff;
+	req_buf->RoamRssiDiff = mac_ctx->roam.configParam.RoamRssiDiff;
 	req_buf->rssi_abs_thresh = mac_ctx->roam.configParam.rssi_abs_thresh;
 	req_buf->reason = reason;
 	req_buf->NeighborScanTimerPeriod =
@@ -19321,8 +19239,6 @@ csr_create_roam_scan_offload_request(tpAniSirGlobal mac_ctx,
 		roam_info->cfgParams.maxChannelScanTime;
 	req_buf->EmptyRefreshScanPeriod =
 		roam_info->cfgParams.emptyScanRefreshPeriod;
-	req_buf->full_roam_scan_period =
-		roam_info->cfgParams.full_roam_scan_period;
 	req_buf->RoamBmissFirstBcnt =
 		roam_info->cfgParams.nRoamBmissFirstBcnt;
 	req_buf->RoamBmissFinalBcnt =
@@ -19360,11 +19276,10 @@ csr_create_roam_scan_offload_request(tpAniSirGlobal mac_ctx,
 		    curr_ch_lst_info->numOfChannels == 0) {
 			/*
 			 * Retrieve the Channel Cache either from ini or from
-			 * the occupied channels list along with preferred
-			 * channel list configured by the client.
+			 * the occupied channels list.
 			 * Give Preference to INI Channels
 			 */
-			if (specific_chan_info->numOfChannels) {
+			if (roam_info->cfgParams.channelInfo.numOfChannels) {
 				status = csr_fetch_ch_lst_from_ini(mac_ctx,
 								   roam_info,
 								   req_buf);
@@ -19379,13 +19294,6 @@ csr_create_roam_scan_offload_request(tpAniSirGlobal mac_ctx,
 				csr_fetch_ch_lst_from_occupied_lst(mac_ctx,
 						session_id, reason, req_buf,
 						roam_info);
-				/* Add the preferred channel list configured by
-				 * client to the roam channel list along with
-				 * occupied channel list.
-				 */
-				csr_add_ch_lst_from_roam_scan_list(mac_ctx,
-								   req_buf,
-								   roam_info);
 			}
 		}
 #ifdef FEATURE_WLAN_ESE
@@ -19433,8 +19341,8 @@ csr_create_roam_scan_offload_request(tpAniSirGlobal mac_ctx,
 		mac_ctx->roam.roamSession[session_id].
 		connectedProfile.MDID.mobilityDomain;
 	req_buf->sessionId = session_id;
-	req_buf->nProbes = roam_info->cfgParams.roam_scan_n_probes;
-	req_buf->HomeAwayTime = roam_info->cfgParams.roam_scan_home_away_time;
+	req_buf->nProbes = mac_ctx->roam.configParam.nProbes;
+	req_buf->HomeAwayTime = mac_ctx->roam.configParam.nRoamScanHomeAwayTime;
 
 	/*
 	 * Home Away Time should be at least equal to (MaxDwell time + (2*RFS)),
@@ -20270,8 +20178,7 @@ void csr_update_fils_params_rso(tpAniSirGlobal mac,
  * Return: None
  */
 static void csr_update_score_params(tpAniSirGlobal mac_ctx,
-				    tSirRoamOffloadScanReq *req_buffer,
-				    tpCsrNeighborRoamControlInfo roam_info)
+				    tSirRoamOffloadScanReq *req_buffer)
 {
 	struct scoring_param *req_score_params;
 	struct rssi_scoring *req_rssi_score;
@@ -20286,9 +20193,9 @@ static void csr_update_score_params(tpAniSirGlobal mac_ctx,
 	weight_config = &bss_score_params->weight_cfg;
 	rssi_score = &bss_score_params->rssi_score;
 
-	if (!roam_info->cfgParams.enable_scoring_for_roam)
-		req_score_params->disable_bitmap =
-			WLAN_ROAM_SCORING_DISABLE_ALL;
+	if (!bss_score_params->enable_scoring_for_roam)
+			req_score_params->disable_bitmap =
+				WLAN_ROAM_SCORING_DISABLE_ALL;
 
 	req_score_params->rssi_weightage = weight_config->rssi_weightage;
 	req_score_params->ht_weightage = weight_config->ht_caps_weightage;
@@ -20405,12 +20312,6 @@ csr_roam_offload_scan(tpAniSirGlobal mac_ctx, uint8_t session_id,
 	if (NULL == session) {
 		QDF_TRACE(QDF_MODULE_ID_SME, QDF_TRACE_LEVEL_ERROR,
 			 "session is null");
-		return QDF_STATUS_E_FAILURE;
-	}
-
-	if (!csr_is_conn_state_connected(mac_ctx, session_id) &&
-	    command == ROAM_SCAN_OFFLOAD_UPDATE_CFG) {
-		sme_debug("Session not in connected state, RSO not sent");
 		return QDF_STATUS_E_FAILURE;
 	}
 
@@ -20637,7 +20538,7 @@ csr_roam_offload_scan(tpAniSirGlobal mac_ctx, uint8_t session_id,
 				session->pAddIEAssoc,
 				session->nAddIEAssocLength);
 		csr_update_driver_assoc_ies(mac_ctx, session, req_buf);
-		csr_update_score_params(mac_ctx, req_buf, roam_info);
+		csr_update_score_params(mac_ctx, req_buf);
 		csr_update_fils_params_rso(mac_ctx, session, req_buf);
 	}
 

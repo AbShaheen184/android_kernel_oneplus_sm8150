@@ -106,9 +106,6 @@ queue_ra_store(struct request_queue *q, const char *page, size_t count)
 	if (ret < 0)
 		return ret;
 
-	if (!strcmp(current->comm, "init"))
-		ra_kb = VM_MAX_READAHEAD;
-
 	q->backing_dev_info->ra_pages = ra_kb >> (PAGE_SHIFT - 10);
 
 	return ret;
@@ -873,9 +870,6 @@ static void __blk_release_queue(struct work_struct *work)
 	}
 
 	blk_free_queue_stats(q->stats);
-
-	if (q->mq_ops)
-		cancel_delayed_work_sync(&q->requeue_work);
 
 	blk_exit_rl(q, &q->root_rl);
 

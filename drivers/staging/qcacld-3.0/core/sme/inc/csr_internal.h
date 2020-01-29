@@ -200,6 +200,7 @@ enum csr_roam_stats_classtypes {
 	eCsrMaxStats
 };
 
+#ifdef FEATURE_WLAN_DIAG_SUPPORT
 enum csr_diagwlan_status_eventsubtype {
 	eCSR_WLAN_STATUS_CONNECT = 0,
 	eCSR_WLAN_STATUS_DISCONNECT
@@ -217,6 +218,8 @@ enum csr_diagwlan_status_eventreason {
 	eCSR_REASON_ROAM_HO_FAIL,
 
 };
+
+#endif /* FEATURE_WLAN_DIAG_SUPPORT */
 
 struct csr_channel {
 	uint8_t numChannels;
@@ -391,9 +394,6 @@ struct csr_neighbor_roamconfig {
 	uint32_t nhi_rssi_scan_rssi_delta;
 	uint32_t nhi_rssi_scan_delay;
 	int32_t nhi_rssi_scan_rssi_ub;
-	uint32_t full_roam_scan_period;
-	bool enable_scoring_for_roam;
-	uint8_t roam_rssi_diff;
 };
 
 /*
@@ -832,12 +832,6 @@ struct csr_disconnect_stats {
 	uint32_t peer_kickout;
 };
 
-/**
- * struct csr_roam_session - CSR per-vdev context
- * @vdev_id: ID of the vdev for which this entry is applicable
- * @is_bcn_recv_start: Allow to process bcn recv indication
- * @beacon_report_do_not_resume: Do not resume the beacon reporting after scan
- */
 struct csr_roam_session {
 	uint8_t sessionId;      /* Session ID */
 	bool sessionActive;     /* true if it is used */
@@ -906,10 +900,6 @@ struct csr_roam_session {
 	enum csr_roaming_reason roamingReason;
 	bool fCancelRoaming;
 	qdf_mc_timer_t hTimerRoaming;
-#ifdef WLAN_BCN_RECV_FEATURE
-	bool is_bcn_recv_start;
-	bool beacon_report_do_not_resume;
-#endif
 	/* the roamResult that is used when the roaming timer fires */
 	eCsrRoamResult roamResult;
 	/* This is the reason code for join(assoc) failure */

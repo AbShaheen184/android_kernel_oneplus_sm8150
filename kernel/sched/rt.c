@@ -13,6 +13,9 @@
 
 #include "walt.h"
 
+//curtis@ASTI, 2019/4/29, add for uxrealm CONFIG_OPCHAIN
+#include "../coretech/uxcore/opchain_helper.h"
+
 int sched_rr_timeslice = RR_TIMESLICE;
 int sysctl_sched_rr_timeslice = (MSEC_PER_SEC / HZ) * RR_TIMESLICE;
 
@@ -1463,10 +1466,8 @@ static int find_lowest_rq(struct task_struct *task);
 /*
  * Return whether the task on the given cpu is currently non-preemptible
  * while handling a potentially long softint, or if the task is likely
- * to block preemptions soon because (a) it is a ksoftirq thread that is
- * handling slow softints, (b) it is idle and therefore likely to start
- * processing the irq's immediately, (c) the cpu is currently handling
- * hard irq's and will soon move on to the softirq handler.
+ * to block preemptions soon because it is a ksoftirq thread that is
+ * handling slow softints.
  */
 bool
 task_may_not_preempt(struct task_struct *task, int cpu)
@@ -1476,16 +1477,15 @@ task_may_not_preempt(struct task_struct *task, int cpu)
 	struct task_struct *cpu_ksoftirqd = per_cpu(ksoftirqd, cpu);
 
 	return ((softirqs & LONG_SOFTIRQ_MASK) &&
-		(task == cpu_ksoftirqd || is_idle_task(task) ||
-		 (task_thread_info(task)->preempt_count
-			& (HARDIRQ_MASK | SOFTIRQ_MASK))));
+		(task == cpu_ksoftirqd ||
+		 task_thread_info(task)->preempt_count & SOFTIRQ_MASK));
 }
 
 static int
 select_task_rq_rt(struct task_struct *p, int cpu, int sd_flag, int flags,
 		  int sibling_count_hint)
 {
-	struct task_struct *curr, *tgt_task;
+	struct task_struct *curr;
 	struct rq *rq;
 	bool may_not_preempt;
 
@@ -1536,18 +1536,6 @@ select_task_rq_rt(struct task_struct *p, int cpu, int sd_flag, int flags,
 	     (curr->nr_cpus_allowed < 2 ||
 	      curr->prio <= p->prio))) {
 		int target = find_lowest_rq(p);
-
-
-		/*
-		 * Check once for losing a race with the other core's irq
-		 * handler. This does not happen frequently, but it can avoid
-		 * delaying the execution of the RT task in those cases.
-		 */
-		if (target != -1) {
-			tgt_task = READ_ONCE(cpu_rq(target)->curr);
-			if (task_may_not_preempt(tgt_task, target))
-				target = find_lowest_rq(p);
-		}
 
 		/*
 		 * If cpu is non-preemptible, prefer remote cpu
@@ -1777,6 +1765,8 @@ static int rt_energy_aware_wake_cpu(struct task_struct *task)
 	bool boost_on_big = sched_boost() == FULL_THROTTLE_BOOST ?
 				  (sched_boost_policy() == SCHED_BOOST_ON_BIG) :
 				  false;
+//curtis@ASTI, 2019/4/29, add for uxrealm CONFIG_OPCHAIN
+	bool best_cpu_is_claimed = false;
 
 	/* For surfaceflinger with util > 90, prefer to use big core */
 	if (task->compensate_need == 2 && tutil > 90)
@@ -1807,6 +1797,12 @@ retry:
 		}
 
 		for_each_cpu_and(cpu, lowest_mask, sched_group_span(sg)) {
+// add for chainboost CONFIG_ONEPLUS_CHAIN_BOOST
+			struct rq *rq = cpu_rq(cpu);
+			struct task_struct *tsk = rq->curr;
+
+			if (tsk->main_boost_switch || tsk->main_wake_boost)
+				continue;
 			if (cpu_isolated(cpu))
 				continue;
 
@@ -1817,6 +1813,17 @@ retry:
 
 			if (__cpu_overutilized(cpu, tutil))
 				continue;
+
+//curtis@ASTI, 2019/4/29, add for uxrealm CONFIG_OPCHAIN
+			if (best_cpu_is_claimed) {
+				best_cpu_idle_idx = cpu_idle_idx;
+				best_cpu_util_cum = util_cum;
+				best_cpu_util = util;
+				best_cpu = cpu;
+				best_cpu_is_claimed = false;
+				continue;
+			}
+
 
 			/* Find the least loaded CPU */
 			if (util > best_cpu_util)
@@ -1847,6 +1854,13 @@ retry:
 				if (best_cpu_idle_idx == cpu_idle_idx &&
 						best_cpu_util_cum < util_cum)
 					continue;
+			}
+//curtis@ASTI, 2019/4/29, add for uxrealm CONFIG_OPCHAIN
+			if (opc_get_claim_on_cpu(cpu)) {
+				if (best_cpu != -1)
+					continue;
+				else
+					best_cpu_is_claimed = true;
 			}
 
 			best_cpu_idle_idx = cpu_idle_idx;
@@ -2793,8 +2807,6 @@ int sched_group_set_rt_runtime(struct task_group *tg, long rt_runtime_us)
 	rt_runtime = (u64)rt_runtime_us * NSEC_PER_USEC;
 	if (rt_runtime_us < 0)
 		rt_runtime = RUNTIME_INF;
-	else if ((u64)rt_runtime_us > U64_MAX / NSEC_PER_USEC)
-		return -EINVAL;
 
 	return tg_set_rt_bandwidth(tg, rt_period, rt_runtime);
 }
@@ -2814,9 +2826,6 @@ long sched_group_rt_runtime(struct task_group *tg)
 int sched_group_set_rt_period(struct task_group *tg, u64 rt_period_us)
 {
 	u64 rt_runtime, rt_period;
-
-	if (rt_period_us > U64_MAX / NSEC_PER_USEC)
-		return -EINVAL;
 
 	rt_period = rt_period_us * NSEC_PER_USEC;
 	rt_runtime = tg->rt_bandwidth.rt_runtime;

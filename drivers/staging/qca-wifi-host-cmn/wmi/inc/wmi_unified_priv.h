@@ -54,6 +54,8 @@
 
 #define WMI_UNIFIED_MAX_EVENT 0x100
 
+#ifdef WMI_INTERFACE_EVENT_LOGGING
+
 #ifndef WMI_EVENT_DEBUG_MAX_ENTRY
 #define WMI_EVENT_DEBUG_MAX_ENTRY (1024)
 #endif
@@ -89,8 +91,6 @@
 #define wmi_warn_rl(params...) QDF_TRACE_WARN_RL(QDF_MODULE_ID_WMI, params)
 #define wmi_info_rl(params...) QDF_TRACE_INFO_RL(QDF_MODULE_ID_WMI, params)
 #define wmi_debug_rl(params...) QDF_TRACE_DEBUG_RL(QDF_MODULE_ID_WMI, params)
-
-#ifdef WMI_INTERFACE_EVENT_LOGGING
 
 /**
  * struct wmi_command_debug - WMI command log buffer data type
@@ -823,8 +823,7 @@ QDF_STATUS (*send_roam_scan_offload_cmd)(wmi_unified_t wmi_handle,
 QDF_STATUS (*send_roam_scan_offload_scan_period_cmd)(wmi_unified_t wmi_handle,
 				     uint32_t scan_period,
 				     uint32_t scan_age,
-				     uint32_t vdev_id,
-				     uint32_t full_scan_period);
+				     uint32_t vdev_id);
 
 QDF_STATUS (*send_roam_scan_offload_chan_list_cmd)(wmi_unified_t wmi_handle,
 				   uint8_t chan_count,

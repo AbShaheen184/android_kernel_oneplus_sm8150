@@ -2956,6 +2956,8 @@ int hdd_softap_set_channel_change(struct net_device *dev, int target_channel,
 	/* Disable Roaming on all adapters before doing channel change */
 	wlan_hdd_disable_roaming(adapter);
 
+	if (wlan_vdev_mlme_get_opmode(adapter->vdev) == QDF_P2P_GO_MODE)
+		is_p2p_go_session = true;
 	/*
 	 * Post the Channel Change request to SAP.
 	 */
@@ -6433,6 +6435,7 @@ QDF_STATUS hdd_init_ap_mode(struct hdd_adapter *adapter, bool reinit)
 
 	if (!reinit) {
 		adapter->session.ap.sap_config.acs_cfg.acs_mode = false;
+		wlan_hdd_undo_acs(adapter);
 		qdf_mem_zero(&adapter->session.ap.sap_config.acs_cfg,
 			     sizeof(struct sap_acs_cfg));
 	}
@@ -6466,6 +6469,7 @@ void hdd_deinit_ap_mode(struct hdd_context *hdd_ctx,
 		clear_bit(WMM_INIT_DONE, &adapter->event_flags);
 	}
 	qdf_atomic_set(&adapter->session.ap.acs_in_progress, 0);
+	wlan_hdd_undo_acs(adapter);
 	hdd_softap_deinit_tx_rx(adapter);
 	/*
 	 * if we are being called during driver unload,
@@ -8539,6 +8543,7 @@ error:
 	}
 	clear_bit(SOFTAP_INIT_DONE, &adapter->event_flags);
 	qdf_atomic_set(&adapter->session.ap.acs_in_progress, 0);
+	wlan_hdd_undo_acs(adapter);
 	wlansap_reset_sap_config_add_ie(pConfig, eUPDATE_IE_ALL);
 
 free:
@@ -8596,10 +8601,10 @@ static int __wlan_hdd_cfg80211_stop_ap(struct wiphy *wiphy,
 	hdd_enter();
 
 	ret = wlan_hdd_validate_context(hdd_ctx);
-	/*
+	/**
 	 * In case of SSR and other FW down cases, validate context will
 	 * fail. But return success to upper layer so that it can clean up
-	 * kernel variables like beacon interval. If the failure status
+	 * kernal variables like beacon interval. If the failure status
 	 * is returned then next set beacon command will fail as beacon
 	 * interval in not reset.
 	 */
@@ -8608,26 +8613,24 @@ static int __wlan_hdd_cfg80211_stop_ap(struct wiphy *wiphy,
 
 	if (QDF_GLOBAL_FTM_MODE == hdd_get_conparam()) {
 		hdd_err("Command not allowed in FTM mode");
-		return 0;
+		return -EINVAL;
 	}
 
 	if (hdd_ctx->driver_status == DRIVER_MODULES_CLOSED) {
 		hdd_err("Driver module is closed; dropping request");
-		return 0;
+		return -EINVAL;
 	}
 
-	if (wlan_hdd_validate_session_id(adapter->session_id)) {
-		hdd_err("validate session failed. Hence return");
-		return 0;
-	}
+	if (wlan_hdd_validate_session_id(adapter->session_id))
+		return -EINVAL;
+
 	qdf_mtrace(QDF_MODULE_ID_HDD, QDF_MODULE_ID_HDD,
 		   TRACE_CODE_HDD_CFG80211_STOP_AP,
 		   adapter->session_id, adapter->device_mode);
 
 	if (!(adapter->device_mode == QDF_SAP_MODE ||
 	      adapter->device_mode == QDF_P2P_GO_MODE)) {
-		hdd_err("stop ap is given on device modes other than SAP/GO. Hence return");
-		return 0;
+		return -EOPNOTSUPP;
 	}
 
 	/* Clear SOFTAP_INIT_DONE flag to mark stop_ap deinit. So that we do
@@ -8666,6 +8669,9 @@ static int __wlan_hdd_cfg80211_stop_ap(struct wiphy *wiphy,
 	}
 	adapter->session.ap.sap_config.acs_cfg.acs_mode = false;
 	qdf_atomic_set(&adapter->session.ap.acs_in_progress, 0);
+	wlan_hdd_undo_acs(adapter);
+	qdf_mem_zero(&adapter->session.ap.sap_config.acs_cfg,
+						sizeof(struct sap_acs_cfg));
 	hdd_debug("Disabling queues");
 	wlan_hdd_netif_queue_control(adapter,
 				     WLAN_STOP_ALL_NETIF_QUEUE_N_CARRIER,

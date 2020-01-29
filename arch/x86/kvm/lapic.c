@@ -133,7 +133,6 @@ static inline bool kvm_apic_map_get_logical_dest(struct kvm_apic_map *map,
 		if (offset <= max_apic_id) {
 			u8 cluster_size = min(max_apic_id - offset + 1, 16U);
 
-			offset = array_index_nospec(offset, map->max_apic_id + 1);
 			*cluster = &map->phys_map[offset];
 			*mask = dest_id & (0xffff >> (16 - cluster_size));
 		} else {
@@ -209,9 +208,6 @@ static void recalculate_apic_map(struct kvm *kvm)
 		if (!apic_x2apic_mode(apic) && !new->phys_map[xapic_id])
 			new->phys_map[xapic_id] = apic;
 
-		if (!kvm_apic_sw_enabled(apic))
-			continue;
-
 		ldr = kvm_lapic_get_reg(apic, APIC_LDR);
 
 		if (apic_x2apic_mode(apic)) {
@@ -255,8 +251,6 @@ static inline void apic_set_spiv(struct kvm_lapic *apic, u32 val)
 			recalculate_apic_map(apic->vcpu->kvm);
 		} else
 			static_key_slow_inc(&apic_sw_disabled.key);
-
-		recalculate_apic_map(apic->vcpu->kvm);
 	}
 }
 
@@ -835,8 +829,7 @@ static inline bool kvm_apic_map_get_dest_lapic(struct kvm *kvm,
 		if (irq->dest_id > map->max_apic_id) {
 			*bitmap = 0;
 		} else {
-			u32 dest_id = array_index_nospec(irq->dest_id, map->max_apic_id + 1);
-			*dst = &map->phys_map[dest_id];
+			*dst = &map->phys_map[irq->dest_id];
 			*bitmap = 1;
 		}
 		return true;
@@ -1967,11 +1960,13 @@ void kvm_lapic_set_base(struct kvm_vcpu *vcpu, u64 value)
 		}
 	}
 
-	if (((old_value ^ value) & X2APIC_ENABLE) && (value & X2APIC_ENABLE))
-		kvm_apic_set_x2apic_id(apic, vcpu->vcpu_id);
-
-	if ((old_value ^ value) & (MSR_IA32_APICBASE_ENABLE | X2APIC_ENABLE))
-		kvm_x86_ops->set_virtual_apic_mode(vcpu);
+	if ((old_value ^ value) & X2APIC_ENABLE) {
+		if (value & X2APIC_ENABLE) {
+			kvm_apic_set_x2apic_id(apic, vcpu->vcpu_id);
+			kvm_x86_ops->set_virtual_x2apic_mode(vcpu, true);
+		} else
+			kvm_x86_ops->set_virtual_x2apic_mode(vcpu, false);
+	}
 
 	apic->base_address = apic->vcpu->arch.apic_base &
 			     MSR_IA32_APICBASE_BASE;
@@ -2164,7 +2159,7 @@ int kvm_apic_has_interrupt(struct kvm_vcpu *vcpu)
 	struct kvm_lapic *apic = vcpu->arch.apic;
 	u32 ppr;
 
-	if (!kvm_apic_hw_enabled(apic))
+	if (!apic_enabled(apic))
 		return -1;
 
 	__apic_update_ppr(apic, &ppr);

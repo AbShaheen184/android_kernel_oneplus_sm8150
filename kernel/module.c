@@ -1020,8 +1020,6 @@ SYSCALL_DEFINE2(delete_module, const char __user *, name_user,
 	strlcpy(last_unloaded_module, mod->name, sizeof(last_unloaded_module));
 
 	free_module(mod);
-	/* someone could wait for the module in add_unformed_module() */
-	wake_up_all(&module_wq);
 	return 0;
 out:
 	mutex_unlock(&module_mutex);
@@ -1287,18 +1285,6 @@ static int check_version(const struct load_info *info,
 	unsigned int versindex = info->index.vers;
 	unsigned int i, num_versions;
 	struct modversion_info *versions;
-
-	/* Force wlan to load */
-	if (!strncmp("wlan", mod->name, 4))
-		return 1;
-
-	/* Force msm_11ad_proxy to load */
-	if (!strncmp("msm_11ad_proxy", mod->name, 4))
-		return 1;
-
-	/* Force opchain to load */
-	if (!strncmp("opchain", mod->name, 7))
-		return 1;
 
 	/* Exporting module didn't supply crcs?  OK, we're already tainted. */
 	if (!crc)
@@ -1709,8 +1695,6 @@ static int add_usage_links(struct module *mod)
 	return ret;
 }
 
-static void module_remove_modinfo_attrs(struct module *mod, int end);
-
 static int module_add_modinfo_attrs(struct module *mod)
 {
 	struct module_attribute *attr;
@@ -1725,34 +1709,24 @@ static int module_add_modinfo_attrs(struct module *mod)
 		return -ENOMEM;
 
 	temp_attr = mod->modinfo_attrs;
-	for (i = 0; (attr = modinfo_attrs[i]); i++) {
+	for (i = 0; (attr = modinfo_attrs[i]) && !error; i++) {
 		if (!attr->test || attr->test(mod)) {
 			memcpy(temp_attr, attr, sizeof(*temp_attr));
 			sysfs_attr_init(&temp_attr->attr);
 			error = sysfs_create_file(&mod->mkobj.kobj,
 					&temp_attr->attr);
-			if (error)
-				goto error_out;
 			++temp_attr;
 		}
 	}
-
-	return 0;
-
-error_out:
-	if (i > 0)
-		module_remove_modinfo_attrs(mod, --i);
 	return error;
 }
 
-static void module_remove_modinfo_attrs(struct module *mod, int end)
+static void module_remove_modinfo_attrs(struct module *mod)
 {
 	struct module_attribute *attr;
 	int i;
 
 	for (i = 0; (attr = &mod->modinfo_attrs[i]); i++) {
-		if (end >= 0 && i > end)
-			break;
 		/* pick a field to test for end of list */
 		if (!attr->attr.name)
 			break;
@@ -1840,7 +1814,7 @@ static int mod_sysfs_setup(struct module *mod,
 	return 0;
 
 out_unreg_modinfo_attrs:
-	module_remove_modinfo_attrs(mod, -1);
+	module_remove_modinfo_attrs(mod);
 out_unreg_param:
 	module_param_sysfs_remove(mod);
 out_unreg_holders:
@@ -1876,7 +1850,7 @@ static void mod_sysfs_fini(struct module *mod)
 {
 }
 
-static void module_remove_modinfo_attrs(struct module *mod, int end)
+static void module_remove_modinfo_attrs(struct module *mod)
 {
 }
 
@@ -1892,7 +1866,7 @@ static void init_param_lock(struct module *mod)
 static void mod_sysfs_teardown(struct module *mod)
 {
 	del_usage_links(mod);
-	module_remove_modinfo_attrs(mod, -1);
+	module_remove_modinfo_attrs(mod);
 	module_param_sysfs_remove(mod);
 	kobject_put(mod->mkobj.drivers_dir);
 	kobject_put(mod->holders_dir);
@@ -3048,20 +3022,11 @@ static int check_modinfo(struct module *mod, struct load_info *info, int flags)
 	const char *modmagic = get_modinfo(info, "vermagic");
 	int err;
 
-	if(!strncmp("wlan", mod->name, 4))
-		goto end;
-
-	if(!strncmp("msm_11ad_proxy", mod->name, 4))
-		goto end;
-
-	if(!strncmp("opchain", mod->name, 7))
-		goto end;
-
 	if (flags & MODULE_INIT_IGNORE_VERMAGIC)
 		modmagic = NULL;
 
 	/* This is allowed: modprobe --force will invalidate it. */
-	/*if (!modmagic) {
+	if (!modmagic) {
 		err = try_to_force_load(mod, "bad vermagic");
 		if (err)
 			return err;
@@ -3069,9 +3034,8 @@ static int check_modinfo(struct module *mod, struct load_info *info, int flags)
 		pr_err("%s: version magic '%s' should be '%s'\n",
 		       info->name, modmagic, vermagic);
 		return -ENOEXEC;
-	}*/
+	}
 
-end:
 	if (!get_modinfo(info, "intree")) {
 		if (!test_taint(TAINT_OOT_MODULE))
 			pr_warn("%s: loading out-of-tree module taints kernel.\n",
@@ -3443,7 +3407,8 @@ static bool finished_loading(const char *name)
 	sched_annotate_sleep();
 	mutex_lock(&module_mutex);
 	mod = find_module_all(name, strlen(name), true);
-	ret = !mod || mod->state == MODULE_STATE_LIVE;
+	ret = !mod || mod->state == MODULE_STATE_LIVE
+		|| mod->state == MODULE_STATE_GOING;
 	mutex_unlock(&module_mutex);
 
 	return ret;
@@ -3619,7 +3584,8 @@ again:
 	mutex_lock(&module_mutex);
 	old = find_module_all(mod->name, strlen(mod->name), true);
 	if (old != NULL) {
-		if (old->state != MODULE_STATE_LIVE) {
+		if (old->state == MODULE_STATE_COMING
+		    || old->state == MODULE_STATE_UNFORMED) {
 			/* Wait in case it fails to load. */
 			mutex_unlock(&module_mutex);
 			err = wait_event_interruptible(module_wq,

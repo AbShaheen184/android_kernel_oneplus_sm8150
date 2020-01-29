@@ -3987,8 +3987,14 @@ void peer_unmap_timer_handler(void *data)
 		    peer->mac_addr.raw[0], peer->mac_addr.raw[1],
 		    peer->mac_addr.raw[2], peer->mac_addr.raw[3],
 		    peer->mac_addr.raw[4], peer->mac_addr.raw[5]);
-
-	cds_trigger_recovery(QDF_PEER_UNMAP_TIMEDOUT);
+	if (cds_is_self_recovery_enabled()) {
+		if (!cds_is_driver_recovering() && !cds_is_fw_down())
+			cds_trigger_recovery(QDF_PEER_UNMAP_TIMEDOUT);
+		else
+			ol_txrx_err("Recovery is in progress, ignore!");
+	} else {
+		QDF_BUG(0);
+	}
 }
 
 

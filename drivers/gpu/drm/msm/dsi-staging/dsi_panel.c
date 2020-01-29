@@ -976,6 +976,7 @@ bool hbm_active;
 int hbm_level;
 static void set_hbm_mode(struct work_struct *work)
 {
+
 	struct dsi_panel *panel = get_main_display()->panel;
 	int level = hbm_level;
 
@@ -985,7 +986,6 @@ static void set_hbm_mode(struct work_struct *work)
 	 */
 
 	mutex_lock(&panel->panel_lock);
-
 	switch (level) {
 	case 0:
 		__dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_HBM_OFF, false);

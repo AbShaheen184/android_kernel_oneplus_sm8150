@@ -442,14 +442,11 @@ static int get_gate_page(struct mm_struct *mm, unsigned long address,
 		pgd = pgd_offset_k(address);
 	else
 		pgd = pgd_offset_gate(mm, address);
-	if (pgd_none(*pgd))
-		return -EFAULT;
+	BUG_ON(pgd_none(*pgd));
 	p4d = p4d_offset(pgd, address);
-	if (p4d_none(*p4d))
-		return -EFAULT;
+	BUG_ON(p4d_none(*p4d));
 	pud = pud_offset(p4d, address);
-	if (pud_none(*pud))
-		return -EFAULT;
+	BUG_ON(pud_none(*pud));
 	pmd = pmd_offset(pud, address);
 	if (!pmd_present(*pmd))
 		return -EFAULT;
@@ -1367,8 +1364,7 @@ static inline pte_t gup_get_pte(pte_t *ptep)
 }
 #endif
 
-static void __maybe_unused undo_dev_pagemap(int *nr, int nr_start,
-					    struct page **pages)
+static void undo_dev_pagemap(int *nr, int nr_start, struct page **pages)
 {
 	while ((*nr) - nr_start) {
 		struct page *page = pages[--(*nr)];
